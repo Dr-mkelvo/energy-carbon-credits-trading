@@ -19,8 +19,8 @@ To use the system, clone the github repository to your computer.
 Run the commands below to run the program.
 
 ```bash
-    git clone https://github.com/your_repo/your_program.git
-    cd your_program
+    git clone https://github.com/Dr-mkelvo/energy-carbon-credits-trading.git
+    cd energy-carbon-credits-trading
 ```
 
 ## Data Structures

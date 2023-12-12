@@ -4,9 +4,10 @@ use candid::{Decode, Encode};
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
 use ic_stable_structures::{BoundedStorable, Cell, DefaultMemoryImpl, StableBTreeMap, Storable};
 use std::{borrow::Cow, cell::RefCell};
+use validator::Validate;
 
 // Define type aliases for convenience
-type Memory = VirtualMemory<DefaultMinemoryImpl>;
+type Memory = VirtualMemory<DefaultMemoryImpl>;
 type IdCell = Cell<u64, Memory>;
 
 #[derive(candid::CandidType, Clone, Serialize, Deserialize, Default)]
@@ -143,9 +144,11 @@ thread_local! {
 }
 
 // Define structs for payload data
-#[derive(candid::CandidType, Clone, Serialize, Deserialize, Default)]
+#[derive(candid::CandidType, Clone, Serialize, Deserialize, Default, Validate)]
 struct ClientPayload {
+    #[validate(length(min = 3))]
     name: String,
+    #[validate(length(min = 5))]
     phone: String,
 }
 
@@ -162,17 +165,22 @@ struct InitPayload {
     credit_per_energy: u64,
 }
 
-#[derive(candid::CandidType, Clone, Serialize, Deserialize, Default)]
+#[derive(candid::CandidType, Clone, Serialize, Deserialize, Default, Validate)]
 struct UpdateClientPayload {
     id: u64,
+    #[validate(length(min = 3))]
     name: String,
+    #[validate(length(min = 5))]
     phone: String,
 }
 
-#[derive(candid::CandidType, Clone, Serialize, Deserialize, Default)]
+#[derive(candid::CandidType, Clone, Serialize, Deserialize, Default, Validate)]
 struct ProducerPayload {
+    #[validate(length(min = 3))]
     name: String,
+    #[validate(length(min = 5))]
     phone: String,
+    #[validate(length(min = 4))]
     password: String,
 }
 
@@ -207,18 +215,30 @@ struct ProducerReturn {
 
 // initiate the contract
 #[ic_cdk::update]
-fn init_contract(payload: InitPayload) -> String {
+fn init_contract(payload: InitPayload) -> Result<String, Error> {
     let contract = Contract {
         password: payload.password,
         credit_per_energy: payload.credit_per_energy,
     };
-    CONTRACT_STORAGE.with(|s| s.borrow_mut().insert(0, contract));
-    format!("Contract initiated successfully")
+    match CONTRACT_STORAGE.with(|s| s.borrow_mut().insert(0, contract)) {
+        Some(_) => Err(Error::InvalidPayload {
+            msg: "Could not initiate contract, try again".to_string(),
+        }),
+        None => Ok("Contract initiated successfully".to_string()),
+    }
 }
 
 // Define functions to add data to the storage
 #[ic_cdk::update]
-fn add_client(payload: ClientPayload) -> Client {
+fn add_client(payload: ClientPayload) -> Result<Client, Error> {
+    // Validate the payload
+    let validate_payload = payload.validate();
+    if validate_payload.is_err() {
+        return Err(Error::InvalidPayload {
+            msg: validate_payload.unwrap_err().to_string(),
+        });
+    }
+
     let id = ID_COUNTER
         .with(|counter| {
             let current_id = *counter.borrow().get();
@@ -233,10 +253,15 @@ fn add_client(payload: ClientPayload) -> Client {
         credits: 0,
     };
 
-    CLIENT_STORAGE.with(|s| s.borrow_mut().insert(id, client.clone()));
-    client
+    match CLIENT_STORAGE.with(|s| s.borrow_mut().insert(id, client.clone())) {
+        Some(_) => Err(Error::InvalidPayload {
+            msg: format!("Could not add client name: {}", payload.name),
+        }),
+        None => Ok(client),
+    }
 }
 
+// Define query functions to get client by id
 #[ic_cdk::query]
 fn get_client(id: u64) -> Result<Client, Error> {
     match CLIENT_STORAGE.with(|s| s.borrow().get(&id)) {
@@ -250,9 +275,12 @@ fn get_client(id: u64) -> Result<Client, Error> {
 // Define query functions to get all clients
 #[ic_cdk::query]
 fn get_clients() -> Result<Vec<Client>, Error> {
+    // Retrieve all clients from the storage
     let clients_vec: Vec<(u64, Client)> = CLIENT_STORAGE.with(|s| s.borrow().iter().collect());
+    // Extract the clients from the tuple and create a vector
     let clients: Vec<Client> = clients_vec.into_iter().map(|(_, client)| client).collect();
 
+    // Check if any clients are found
     match clients.len() {
         0 => Err(Error::NotFound {
             msg: format!("no clients found"),
@@ -264,6 +292,7 @@ fn get_clients() -> Result<Vec<Client>, Error> {
 // Define functions to update data in the storage
 #[ic_cdk::update]
 fn update_client(payload: UpdateClientPayload) -> Result<String, Error> {
+    // get client from storage by id
     let client = CLIENT_STORAGE.with(|s| s.borrow().get(&payload.id));
     match client {
         Some(client) => {
@@ -287,7 +316,15 @@ fn update_client(payload: UpdateClientPayload) -> Result<String, Error> {
 
 // function to add producer
 #[ic_cdk::update]
-fn add_producer(payload: ProducerPayload) -> Producer {
+fn add_producer(payload: ProducerPayload) -> Result<Producer, Error> {
+    // Validate the payload
+    let validate_payload = payload.validate();
+    if validate_payload.is_err() {
+        return Err(Error::InvalidPayload {
+            msg: validate_payload.unwrap_err().to_string(),
+        });
+    }
+
     let id = ID_COUNTER
         .with(|counter| {
             let current_id = *counter.borrow().get();
@@ -304,13 +341,18 @@ fn add_producer(payload: ProducerPayload) -> Producer {
         credits: 0,
     };
 
-    PRODUCER_STORAGE.with(|s| s.borrow_mut().insert(id, producer.clone()));
-    producer
+    match PRODUCER_STORAGE.with(|s| s.borrow_mut().insert(id, producer.clone())) {
+        Some(_) => Err(Error::InvalidPayload {
+            msg: format!("Could not add producer name: {}", payload.name),
+        }),
+        None => Ok(producer),
+    }
 }
 
 // award producer carbon credits per renewable energy supply
 #[ic_cdk::update]
 fn award_producer_energy(payload: ProducerEnergyPayload) -> Result<String, Error> {
+    // check if producer exists
     let producer = PRODUCER_STORAGE.with(|s| s.borrow().get(&payload.producer_id));
     match producer {
         Some(producer) => {
@@ -355,13 +397,16 @@ fn award_producer_energy(payload: ProducerEnergyPayload) -> Result<String, Error
 // function to get all producers
 #[ic_cdk::query]
 fn get_producers() -> Result<Vec<ProducerReturn>, Error> {
+    // Retrieve all producers from the storage
     let producers_vec: Vec<(u64, Producer)> =
         PRODUCER_STORAGE.with(|s| s.borrow().iter().collect());
+    // Extract the producers from the tuple and create a vector
     let producers: Vec<Producer> = producers_vec
         .into_iter()
         .map(|(_, producer)| producer)
         .collect();
 
+    // Check if any producers are found
     match producers.len() {
         0 => Err(Error::NotFound {
             msg: format!("no producers found"),
@@ -385,8 +430,10 @@ fn get_producers() -> Result<Vec<ProducerReturn>, Error> {
 // function to get producer by id
 #[ic_cdk::query]
 fn get_producer(id: u64) -> Result<ProducerReturn, Error> {
+    // Retrieve producer from the storage
     let producer = PRODUCER_STORAGE.with(|s| s.borrow().get(&id));
 
+    // Check if producer is found
     match producer {
         Some(producer) => Ok(ProducerReturn {
             id: producer.id,
@@ -396,7 +443,7 @@ fn get_producer(id: u64) -> Result<ProducerReturn, Error> {
             credits: producer.credits,
         }),
         None => Err(Error::NotFound {
-            msg: format!("producer not found"),
+            msg: format!("producer with id: {} not found", id),
         }),
     }
 }
@@ -411,12 +458,13 @@ fn add_credit_order(payload: CreditOrderPayload) -> Result<CreditOrder, Error> {
         })
         .expect("Cannot increment Ids");
 
+    // check if producer exists and has enough credits for order
     let producer = PRODUCER_STORAGE.with(|s| s.borrow().get(&payload.producer_id));
 
     match producer {
         Some(producer) => {
             if producer.credits < payload.credits {
-                return Err(Error::NotFound {
+                return Err(Error::InvalidPayload {
                     msg: "Producer does not have enough credits".to_string(),
                 });
             }
@@ -438,7 +486,7 @@ fn add_credit_order(payload: CreditOrderPayload) -> Result<CreditOrder, Error> {
     };
 
     match CREDIT_ORDER_STORAGE.with(|s| s.borrow_mut().insert(id, credit_order.clone())) {
-        Some(_) => Err(Error::NotFound {
+        Some(_) => Err(Error::InvalidPayload {
             msg: "Invalid payload".to_string(),
         }),
         None => Ok(credit_order),
@@ -448,13 +496,16 @@ fn add_credit_order(payload: CreditOrderPayload) -> Result<CreditOrder, Error> {
 // get all incomplete orders
 #[ic_cdk::query]
 fn get_all_incomplete_orders() -> Result<Vec<CreditOrder>, Error> {
+    // Retrieve all credit orders from the storage
     let credit_orders_vec: Vec<(u64, CreditOrder)> =
         CREDIT_ORDER_STORAGE.with(|s| s.borrow().iter().collect());
+    // Extract the credit orders from the tuple and create a vector
     let credit_orders: Vec<CreditOrder> = credit_orders_vec
         .into_iter()
         .map(|(_, credit_order)| credit_order)
         .collect();
 
+    // Check if any credit orders are found
     match credit_orders.len() {
         0 => Err(Error::NotFound {
             msg: format!("no incomplete credit orders found"),
@@ -472,13 +523,16 @@ fn get_all_incomplete_orders() -> Result<Vec<CreditOrder>, Error> {
 // function to get all credit orders
 #[ic_cdk::query]
 fn get_all_credit_orders() -> Result<Vec<CreditOrder>, Error> {
+    // Retrieve all credit orders from the storage
     let credit_orders_vec: Vec<(u64, CreditOrder)> =
         CREDIT_ORDER_STORAGE.with(|s| s.borrow().iter().collect());
+    // Extract the credit orders from the tuple and create a vector
     let credit_orders: Vec<CreditOrder> = credit_orders_vec
         .into_iter()
         .map(|(_, credit_order)| credit_order)
         .collect();
 
+    // Check if any credit orders are found
     match credit_orders.len() {
         0 => Err(Error::NotFound {
             msg: format!("no credit orders found"),
@@ -490,12 +544,14 @@ fn get_all_credit_orders() -> Result<Vec<CreditOrder>, Error> {
 // function to get credit order by id
 #[ic_cdk::query]
 fn get_credit_order_by_id(id: u64) -> Result<CreditOrder, Error> {
+    // Retrieve credit order from the storage
     let credit_order = CREDIT_ORDER_STORAGE.with(|s| s.borrow().get(&id));
 
+    // Check if credit order is found
     match credit_order {
         Some(credit_order) => Ok(credit_order.clone()),
         None => Err(Error::NotFound {
-            msg: format!("credit order not found"),
+            msg: format!("credit order with id: {} not found", id),
         }),
     }
 }
@@ -503,29 +559,35 @@ fn get_credit_order_by_id(id: u64) -> Result<CreditOrder, Error> {
 // function for clients to bid for credit order
 #[ic_cdk::update]
 fn bid(payload: BidPayload) -> Result<String, Error> {
+    // check if credit order exists
     let credit_order = CREDIT_ORDER_STORAGE.with(|s| s.borrow().get(&payload.credit_order_id));
     match credit_order {
         Some(credit_order) => {
+            // check if client exists
             let client = CLIENT_STORAGE.with(|s| s.borrow().get(&payload.client_id));
             match client {
                 Some(client) => {
+                    // check if credit order has already been paid
                     if credit_order.paid {
                         return Err(Error::AlreadyPaid {
                             msg: "Credit order has already been paid".to_string(),
                         });
                     }
+                    // check if client has already bid for credit order
                     if credit_order.client_id == Some(client.id) {
-                        return Err(Error::NotFound {
+                        return Err(Error::InvalidPayload {
                             msg: "Client has already bid for credit order".to_string(),
                         });
                     }
+                    // check if client is bidding for credit order with lower offer_per_credit
                     if credit_order.min_offer_per_credit > payload.offer_per_credit {
-                        return Err(Error::NotFound {
+                        return Err(Error::InvalidPayload {
                             msg: "Client cannot bid for credit order with lower offer_per_credit"
                                 .to_string(),
                         });
                     }
 
+                    // update credit order
                     CREDIT_ORDER_STORAGE.with(|s| {
                         s.borrow_mut().insert(
                             payload.credit_order_id,
@@ -536,24 +598,7 @@ fn bid(payload: BidPayload) -> Result<String, Error> {
                             },
                         )
                     });
-
-                    match CLIENT_STORAGE.with(|s| {
-                        s.borrow_mut().insert(
-                            client.id,
-                            Client {
-                                credits: client.credits - credit_order.credits,
-                                ..client.clone()
-                            },
-                        )
-                    }) {
-                        Some(_) => {}
-                        None => {
-                            return Err(Error::NotFound {
-                                msg: "Client not found".to_string(),
-                            });
-                        }
-                    }
-                    Ok(format!("Client bid successfully"))
+                    Ok(format!("Client id: {} bid successfully", payload.client_id))
                 }
                 None => Err(Error::NotFound {
                     msg: "Client not found".to_string(),
@@ -569,6 +614,7 @@ fn bid(payload: BidPayload) -> Result<String, Error> {
 // function for producers to mark bid as paid and complete it
 #[ic_cdk::update]
 fn mark_order_paid(payload: PaidPayload) -> Result<String, Error> {
+    // check if credit order exists
     let credit_order = CREDIT_ORDER_STORAGE.with(|s| s.borrow().get(&payload.order_id));
 
     match credit_order {
@@ -589,34 +635,35 @@ fn mark_order_paid(payload: PaidPayload) -> Result<String, Error> {
                 }
             }
 
+            // check if credit order has already been paid
             if credit_order.paid {
                 return Err(Error::AlreadyPaid {
                     msg: "Credit order has already been paid".to_string(),
                 });
             }
-
+            // check if client has already bid for credit order
             if credit_order.client_id.is_none() {
-                return Err(Error::NotFound {
+                return Err(Error::InvalidPayload {
                     msg: "Client has not bid for credit order".to_string(),
                 });
             }
 
-            match deduct_credit_from_producer(
-                credit_order.producer_id,
-                credit_order.min_offer_per_credit,
-            ) {
+            // update producer to deduct credits
+            match deduct_credit_from_producer(credit_order.producer_id, credit_order.credits) {
                 Ok(_) => {}
                 Err(e) => {
                     return Err(e);
                 }
             }
 
-            match add_credit_to_client(credit_order.client_id, credit_order.min_offer_per_credit) {
+            // update client to add credits
+            match add_credit_to_client(credit_order.client_id, credit_order.credits) {
                 Ok(_) => {}
                 Err(e) => {
                     return Err(e);
                 }
             }
+            // update credit order
             CREDIT_ORDER_STORAGE.with(|s| {
                 s.borrow_mut().insert(
                     payload.order_id,
@@ -626,19 +673,26 @@ fn mark_order_paid(payload: PaidPayload) -> Result<String, Error> {
                     },
                 )
             });
-            Ok(format!("Credit order marked as paid"))
+            Ok(format!(
+                "Credit order id: {} marked as paid",
+                payload.order_id
+            ))
         }
         None => Err(Error::NotFound {
             msg: "Credit order not found".to_string(),
         }),
     }
 }
+
+// fuction to add credit to client
 fn add_credit_to_client(client_id: Option<u64>, credits: u64) -> Result<String, Error> {
     match client_id.is_some() {
         true => {
+            // check if client exists
             let client = CLIENT_STORAGE.with(|s| s.borrow().get(&client_id.unwrap()));
             match client {
                 Some(client) => {
+                    // update client
                     CLIENT_STORAGE.with(|s| {
                         s.borrow_mut().insert(
                             client.id,
@@ -648,21 +702,24 @@ fn add_credit_to_client(client_id: Option<u64>, credits: u64) -> Result<String, 
                             },
                         )
                     });
-                    Ok(format!("Client credited successfully"))
+                    Ok(format!("Client id: {} credited successfully", client.id))
                 }
                 None => Err(Error::NotFound {
                     msg: "Client not found".to_string(),
                 }),
-            } // //
+            }
         }
         false => Ok("Order client not added".to_string()),
     }
 }
 
+//  fucntion to deduct credit from producer
 fn deduct_credit_from_producer(producer_id: u64, credits: u64) -> Result<String, Error> {
+    // check if producer exists
     let producer = PRODUCER_STORAGE.with(|s| s.borrow().get(&producer_id));
     match producer {
         Some(producer) => {
+            // update producer
             PRODUCER_STORAGE.with(|s| {
                 s.borrow_mut().insert(
                     producer_id,
@@ -672,7 +729,10 @@ fn deduct_credit_from_producer(producer_id: u64, credits: u64) -> Result<String,
                     },
                 )
             });
-            Ok(format!("Producer credited successfully",))
+            Ok(format!(
+                "Producer id: {} credited successfully",
+                producer_id
+            ))
         }
         None => Err(Error::NotFound {
             msg: "Producer not found".to_string(),
@@ -685,6 +745,7 @@ fn deduct_credit_from_producer(producer_id: u64, credits: u64) -> Result<String,
 enum Error {
     NotFound { msg: String },
     AlreadyPaid { msg: String },
+    InvalidPayload { msg: String },
     Unauthorized { msg: String },
 }
 
