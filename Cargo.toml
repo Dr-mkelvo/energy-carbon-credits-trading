@@ -1,0 +1,5 @@
+[workspace]
+members = [
+    "src/energy_trading_backend",
+]
+resolver = "2"

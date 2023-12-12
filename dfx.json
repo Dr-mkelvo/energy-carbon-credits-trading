@@ -1,0 +1,30 @@
+{
+  "canisters": {
+    "energy_trading_backend": {
+      "candid": "src/energy_trading_backend/energy_trading_backend.did",
+      "package": "energy_trading_backend",
+      "type": "rust"
+    },
+    "energy_trading_frontend": {
+      "dependencies": [
+        "energy_trading_backend"
+      ],
+      "frontend": {
+        "entrypoint": "src/energy_trading_frontend/src/index.html"
+      },
+      "source": [
+        "src/energy_trading_frontend/assets",
+        "dist/energy_trading_frontend/"
+      ],
+      "type": "assets"
+    }
+  },
+  "defaults": {
+    "build": {
+      "args": "",
+      "packtool": ""
+    }
+  },
+  "output_env_file": ".env",
+  "version": 1
+}
